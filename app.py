@@ -5,25 +5,44 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import SVC
 from sklearn.pipeline import Pipeline
 
-# ------------------------------------------------------------------------------
 # 1. PAGE CONFIG
-# ------------------------------------------------------------------------------
 st.set_page_config(
     page_title="LifeCare Bangsar South — ABSA Healthcare Analytics",
     page_icon="🏥",
     layout="wide"
 )
 
-# ------------------------------------------------------------------------------
-# 2. CACHED DATA & MODEL LOADING
-# ------------------------------------------------------------------------------
+# 2. CACHED DATA & MODEL LOADING (Reads LIFECARE_ABSA_INDEPENDENT_RESULTS.csv)
 @st.cache_data(max_size=10)
 def load_absa_data(filepath: str):
-    df_absa = pd.read_csv(filepath)
+    raw_df = pd.read_csv(filepath)
+
+    rows = []
+    for _, r in raw_df.iterrows():
+        if pd.isna(r["ASPECT_TERMS"]) or str(r["ASPECT_TERMS"]).strip() == "":
+            continue
+        terms = [t.strip() for t in str(r["ASPECT_TERMS"]).split("|")]
+        cats = [c.strip() for c in str(r["ASPECT_CATEGORIES"]).split("|")]
+        sents = [s.strip() for s in str(r["ASPECT_SENTIMENTS"]).split("|")]
+        sentence_txt = r["REVIEW_ENGLISH"] if pd.notna(r["REVIEW_ENGLISH"]) else r["Review"]
+
+        for t, c, s in zip(terms, cats, sents):
+            rows.append({
+                "Review_No": r["No"],
+                "Reviewer_Name": r["Reviewer's name"],
+                "Reviewed_Date": r["Reviewed Date"],
+                "Rating": r["Rating"],
+                "Sentence": sentence_txt,
+                "Aspect_Term": t,
+                "Aspect_Category": c,
+                "Sentiment": s
+            })
+
+    df_absa = pd.DataFrame(rows)
     df_absa["Reviewed_Date"] = pd.to_datetime(df_absa["Reviewed_Date"])
     df_absa["Year"] = df_absa["Reviewed_Date"].dt.year
 
-    # Dynamically recreate Category Summary
+    # Category Summary
     df_cat = (
         df_absa.groupby(["Aspect_Category", "Sentiment"])
         .size()
@@ -33,25 +52,25 @@ def load_absa_data(filepath: str):
     )
     df_cat["Total_Mentions"] = df_cat[["Negative", "Neutral", "Positive"]].sum(axis=1)
 
-    # Dynamically recreate Top Aspect Terms
+    # Top Aspect Terms
+    polarity_map = {"Positive": 1, "Neutral": 0, "Negative": -1}
+    df_absa["Polarity_Num"] = df_absa["Sentiment"].map(polarity_map).fillna(0)
     df_terms = (
         df_absa.groupby(["Aspect_Category", "Aspect_Term"])
         .agg(
             Total_Mentions=("Sentiment", "count"),
-            Avg_Polarity=("Polarity_Score", "mean")
+            Positive_Mentions=("Sentiment", lambda x: (x == "Positive").sum()),
+            Negative_Mentions=("Sentiment", lambda x: (x == "Negative").sum()),
+            Net_Sentiment_Score=("Polarity_Num", "mean")
         )
         .reset_index()
         .sort_values("Total_Mentions", ascending=False)
     )
 
-    # Dynamically recreate Hidden Negatives (4 & 5 Star reviews with Negative aspects)
+    # Hidden Negatives (4 & 5 Star reviews with Negative aspects)
     df_hidden = df_absa[(df_absa["Rating"].isin([4, 5])) & (df_absa["Sentiment"] == "Negative")].copy()
 
     return df_absa, df_cat, df_terms, df_hidden
-
-# Call using your CSV filename:
-df_absa, df_cat, df_terms, df_hidden = load_absa_data("LIFECARE_ABSA_DATA.csv")
-
 
 @st.cache_resource
 def train_svm_model(df_absa: pd.DataFrame):
@@ -64,12 +83,10 @@ def train_svm_model(df_absa: pd.DataFrame):
     pipe.fit(X, y)
     return pipe
 
-df_absa, df_cat, df_terms, df_hidden = load_absa_data("LIFECARE_ABSA_ANALYSIS_OUTPUT.xlsx")
+df_absa, df_cat, df_terms, df_hidden = load_absa_data("LIFECARE_ABSA_INDEPENDENT_RESULTS.csv")
 svm_pipeline = train_svm_model(df_absa)
 
-# ------------------------------------------------------------------------------
 # 3. SIDEBAR FILTERS
-# ------------------------------------------------------------------------------
 st.sidebar.header("🔍 Filter Patient Feedback")
 
 all_categories = sorted(df_absa["Aspect_Category"].unique())
@@ -95,11 +112,9 @@ filtered_df = df_absa[
     (df_absa["Rating"].isin(selected_ratings))
 ]
 
-# ------------------------------------------------------------------------------
-# 4. HEADER & RESPONSIVE KPI METRICS (Streamlit 1.67 st.grid)
-# ------------------------------------------------------------------------------
+# 4. HEADER & KPI METRICS
 st.title("🏥 LifeCare Diagnostic Medical Centre — ABSA Dashboard")
-st.caption("Aspect-Based Sentiment Analysis (ABSA) of Google Reviews (Bangsar South)")
+st.caption("Independent 7-Category Clause-Level Aspect-Based Sentiment Analysis (Bangsar South)")
 
 total_mentions = len(filtered_df)
 pos_pct = (filtered_df["Sentiment"] == "Positive").mean() * 100 if total_mentions else 0
@@ -112,9 +127,7 @@ with st.grid(columns=4):
     st.metric("Neutral Aspect Share", f"{neu_pct:.1f}%", border=True)
     st.metric("Negative Aspect Share", f"{neg_pct:.1f}%", border=True)
 
-# ------------------------------------------------------------------------------
 # 5. MAIN DASHBOARD TABS
-# ------------------------------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Operational EDA",
     "🔎 Aspect Term Explorer",
@@ -137,7 +150,7 @@ with tab1:
             y="Aspect_Category",
             color="Sentiment",
             orientation="h",
-            title="Sentiment Breakdown by Operational Category",
+            title="Sentiment Breakdown Across 7 Operational Categories",
             color_discrete_map={"Positive": "#2ecc71", "Neutral": "#95a5a6", "Negative": "#e74c3c"}
         )
         fig_cat.update_layout(yaxis={"categoryorder": "total ascending"})
@@ -159,7 +172,6 @@ with tab1:
         )
         st.plotly_chart(fig_yr, use_container_width=True)
 
-    # Heatmap of Star Rating vs Aspect Sentiment
     if not filtered_df.empty:
         rat_ct = pd.crosstab(filtered_df["Rating"], filtered_df["Sentiment"], normalize="index") * 100
         rat_ct = rat_ct.reindex(columns=["Negative", "Neutral", "Positive"], fill_value=0).round(1)
@@ -173,7 +185,7 @@ with tab1:
         st.plotly_chart(fig_hm, use_container_width=True)
 
 with tab2:
-    st.subheader("Top Extracted Aspect Keywords & Polarity")
+    st.subheader("Top Extracted Aspect Keywords & Net Sentiment")
     cat_pick = st.selectbox("Select Operational Category", ["All"] + all_categories)
     terms_view = df_terms if cat_pick == "All" else df_terms[df_terms["Aspect_Category"] == cat_pick]
 
@@ -181,7 +193,7 @@ with tab2:
         terms_view.head(15),
         x="Total_Mentions",
         y="Aspect_Term",
-        color="Avg_Polarity",
+        color="Net_Sentiment_Score",
         orientation="h",
         color_continuous_scale="RdYlGn",
         title=f"Top 15 Aspect Keywords ({cat_pick})"
@@ -197,7 +209,7 @@ with tab3:
         "friction (e.g., long queues or billing delays) inside their review text."
     )
     st.dataframe(
-        df_hidden[["Review_No", "Reviewed_Date", "Rating", "Aspect_Category", "Aspect_Term", "Polarity_Score", "Sentence"]],
+        df_hidden[["Review_No", "Reviewed_Date", "Rating", "Aspect_Category", "Aspect_Term", "Sentence"]],
         use_container_width=True
     )
 
