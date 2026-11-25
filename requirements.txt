@@ -1,4 +1,6 @@
 scikit-learn
 pandas
 numpy
-streamlit
+streamlit>=1.67.0
+plotly
+scikit-learn
