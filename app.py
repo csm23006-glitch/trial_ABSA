@@ -210,7 +210,23 @@ else:
 
 st.title(f"🏥 {facility_name} — ABSA Dashboard")
 st.caption(f"Mode: **{mode_label}** | Pre-ABSA Star Rating & 7-Category Clause-Level ABSA")
+
+total_reviews = len(filtered_raw)
+avg_rating = filtered_raw["Rating"].mean() if total_reviews else 0
+total_mentions = len(filtered_absa)
+pos_pct = (filtered_absa["Sentiment"] == "Positive").mean() * 100 if total_mentions else 0
+neg_pct = (filtered_absa["Sentiment"] == "Negative").mean() * 100 if total_mentions else 0
+
+with st.grid(columns=5):
+    st.metric("Total Reviews (Pre-ABSA)", f"{total_reviews:,}", border=True)
+    st.metric("Average Star Rating", f"{avg_rating:.2f} ★", border=True)
+    st.metric("Extracted Aspect Mentions", f"{total_mentions:,}", border=True)
+    st.metric("Positive Aspect Share", f"{pos_pct:.1f}%", border=True)
+    st.metric("Negative Aspect Share", f"{neg_pct:.1f}%", border=True)
+
+
 # 6. DASHBOARD TABS
+
 tab0, tab1, tab2, tab3, tab4 = st.tabs([
     "⭐ Pre-ABSA Star Rating EDA",
     "📊 Post-ABSA Operational EDA",
